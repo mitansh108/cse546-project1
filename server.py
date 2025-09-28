@@ -23,15 +23,20 @@ sdb_client = boto3.client('sdb', config=config)
 executor = ThreadPoolExecutor(max_workers=50)
 
 def upload_to_s3(file_content, filename):
-    try:
-        logger.info(f"Uploading {filename} to S3")
-        file_like = io.BytesIO(file_content)
-        s3_client.upload_fileobj(file_like, '1233383933-in-bucket', filename)
-        logger.info(f"Successfully uploaded {filename}")
-        return True
-    except Exception as e:
-        logger.error(f"Failed to upload {filename}: {e}")
-        return False
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            logger.info(f"Uploading {filename} to S3 (attempt {attempt + 1})")
+            file_like = io.BytesIO(file_content)
+            s3_client.upload_fileobj(file_like, '1233383933-in-bucket', filename)
+            logger.info(f"Successfully uploaded {filename}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to upload {filename} (attempt {attempt + 1}): {e}")
+            if attempt == max_retries - 1:
+                return False
+            time.sleep(0.1)  # Brief retry delay
+    return False
 
 def get_classification(item_name):
     try:
@@ -54,12 +59,12 @@ def get_classification(item_name):
 
 @app.route('/', methods=['POST'])
 def handle_request():
-    logger.info(f"Received request: {request.method} {request.url}")
-    logger.info(f"Files in request: {list(request.files.keys())}")
-    
-    if 'inputFile' not in request.files:
-        logger.error("No inputFile in request")
-        return Response('No inputFile provided', status=400, mimetype='text/plain')
+    try:
+        logger.info(f"Received request: {request.method} {request.url}")
+        
+        if 'inputFile' not in request.files:
+            logger.error("No inputFile in request")
+            return Response('No inputFile provided', status=400, mimetype='text/plain')
     
     file = request.files['inputFile']
     if file.filename == '':
@@ -86,12 +91,17 @@ def handle_request():
     else:
         result = f'{filename_without_ext}:Unknown'
     
-    logger.info(f"Returning result: {result}")
-    return Response(result, status=200, mimetype='text/plain')
+        logger.info(f"Returning result: {result}")
+        return Response(result, status=200, mimetype='text/plain')
+    
+    except Exception as e:
+        logger.error(f"Unexpected error: {e}")
+        return Response('Internal server error', status=500, mimetype='text/plain')
 
 @app.route('/health', methods=['GET'])
 def health_check():
     return Response('OK', status=200, mimetype='text/plain')
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8000, threaded=True)
+    # Use gunicorn-like settings for better concurrency
+    app.run(host='0.0.0.0', port=8000, threaded=True, processes=1)
