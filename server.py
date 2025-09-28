@@ -1,34 +1,30 @@
-from fastapi import FastAPI, File, UploadFile, HTTPException
-from fastapi.responses import PlainTextResponse
+from flask import Flask, request, Response
+import os
 import boto3
 import io
-import os
 from concurrent.futures import ThreadPoolExecutor
 from botocore.config import Config
-import asyncio
 
-app = FastAPI()
+app = Flask(__name__)
 
-# AWS Configuration - MAXIMUM PERFORMANCE
 config = Config(
-    max_pool_connections=500,
+    max_pool_connections=100,
     retries={'max_attempts': 1, 'mode': 'standard'},
     region_name='us-east-1'
 )
 
 s3_client = boto3.client('s3', config=config)
 sdb_client = boto3.client('sdb', config=config)
-executor = ThreadPoolExecutor(max_workers=100)
+executor = ThreadPoolExecutor(max_workers=50)
 
-def upload_to_s3(file_content: bytes, filename: str) -> bool:
+def upload_to_s3(file_content, filename):
     try:
         file_like = io.BytesIO(file_content)
         s3_client.upload_fileobj(file_like, '1233383933-in-bucket', filename)
-        return True
     except:
-        return False
+        pass
 
-def get_classification(item_name: str) -> str:
+def get_classification(item_name):
     try:
         response = sdb_client.get_attributes(
             DomainName='1233383933-simpleDB',
@@ -43,39 +39,34 @@ def get_classification(item_name: str) -> str:
     except:
         return None
 
-@app.post("/", response_class=PlainTextResponse)
-async def handle_request(inputFile: UploadFile = File(...)):
-    try:
-        if not inputFile.filename:
-            raise HTTPException(status_code=400, detail="No file selected")
-        
-        filename = inputFile.filename
-        filename_without_ext = os.path.splitext(filename)[0]
-        
-        # Read file content
-        file_content = await inputFile.read()
-        
-        # Start S3 upload in background (don't wait)
-        executor.submit(upload_to_s3, file_content, filename)
-        
-        # Get classification immediately
-        classification = get_classification(filename_without_ext)
-        
-        # Return result immediately
-        if classification:
-            result = f'{filename_without_ext}:{classification}'
-        else:
-            result = f'{filename_without_ext}:Unknown'
-        
-        return result
+@app.route('/', methods=['POST'])
+def handle_request():
+    if 'inputFile' not in request.files:
+        return Response('No inputFile provided', status=400, mimetype='text/plain')
     
-    except Exception as e:
-        return f"Error: {str(e)}"
+    file = request.files['inputFile']
+    if file.filename == '':
+        return Response('No file selected', status=400, mimetype='text/plain')
+    
+    filename = file.filename
+    filename_without_ext = os.path.splitext(filename)[0]
+    
+    # Read file content once
+    file.seek(0)
+    file_content = file.read()
+    
+    # Start S3 upload in background (fire and forget)
+    executor.submit(upload_to_s3, file_content, filename)
+    
+    # Get classification immediately
+    classification = get_classification(filename_without_ext)
+    
+    if classification:
+        result = f'{filename_without_ext}:{classification}'
+    else:
+        result = f'{filename_without_ext}:Unknown'
+    
+    return Response(result, status=200, mimetype='text/plain')
 
-@app.get("/health", response_class=PlainTextResponse)
-async def health_check():
-    return "OK"
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000, workers=1)
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=8000, threaded=True)
