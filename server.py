@@ -35,6 +35,7 @@ def upload_to_s3(file_content, filename):
             logger.error(f"Failed to upload {filename} (attempt {attempt + 1}): {e}")
             if attempt == max_retries - 1:
                 return False
+            import time
             time.sleep(0.1)  # Brief retry delay
     return False
 
@@ -65,32 +66,32 @@ def handle_request():
         if 'inputFile' not in request.files:
             logger.error("No inputFile in request")
             return Response('No inputFile provided', status=400, mimetype='text/plain')
-    
-    file = request.files['inputFile']
-    if file.filename == '':
-        logger.error("Empty filename")
-        return Response('No file selected', status=400, mimetype='text/plain')
-    
-    filename = file.filename
-    filename_without_ext = os.path.splitext(filename)[0]
-    logger.info(f"Processing file: {filename}")
-    
-    # Read file content once
-    file.seek(0)
-    file_content = file.read()
-    logger.info(f"Read {len(file_content)} bytes")
-    
-    # Upload to S3 synchronously for autograder compatibility
-    upload_success = upload_to_s3(file_content, filename)
-    
-    # Get classification
-    classification = get_classification(filename_without_ext)
-    
-    if classification:
-        result = f'{filename_without_ext}:{classification}'
-    else:
-        result = f'{filename_without_ext}:Unknown'
-    
+        
+        file = request.files['inputFile']
+        if file.filename == '':
+            logger.error("Empty filename")
+            return Response('No file selected', status=400, mimetype='text/plain')
+        
+        filename = file.filename
+        filename_without_ext = os.path.splitext(filename)[0]
+        logger.info(f"Processing file: {filename}")
+        
+        # Read file content once
+        file.seek(0)
+        file_content = file.read()
+        logger.info(f"Read {len(file_content)} bytes")
+        
+        # Upload to S3 synchronously for autograder compatibility
+        upload_success = upload_to_s3(file_content, filename)
+        
+        # Get classification
+        classification = get_classification(filename_without_ext)
+        
+        if classification:
+            result = f'{filename_without_ext}:{classification}'
+        else:
+            result = f'{filename_without_ext}:Unknown'
+        
         logger.info(f"Returning result: {result}")
         return Response(result, status=200, mimetype='text/plain')
     
