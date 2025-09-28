@@ -6,8 +6,8 @@ import logging
 from concurrent.futures import ThreadPoolExecutor
 from botocore.config import Config
 
-# Set up logging
-logging.basicConfig(level=logging.INFO)
+# Set up logging - reduce verbosity for performance
+logging.basicConfig(level=logging.ERROR)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
@@ -23,81 +23,52 @@ sdb_client = boto3.client('sdb', config=config)
 executor = ThreadPoolExecutor(max_workers=50)
 
 def upload_to_s3(file_content, filename):
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            logger.info(f"Uploading {filename} to S3 (attempt {attempt + 1})")
-            file_like = io.BytesIO(file_content)
-            s3_client.upload_fileobj(file_like, '1233383933-in-bucket', filename)
-            logger.info(f"Successfully uploaded {filename}")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to upload {filename} (attempt {attempt + 1}): {e}")
-            if attempt == max_retries - 1:
-                return False
-            import time
-            time.sleep(0.1)  # Brief retry delay
-    return False
+    try:
+        file_like = io.BytesIO(file_content)
+        s3_client.upload_fileobj(file_like, '1233383933-in-bucket', filename)
+        return True
+    except:
+        return False
 
 def get_classification(item_name):
     try:
-        logger.info(f"Getting classification for {item_name}")
         response = sdb_client.get_attributes(
             DomainName='1233383933-simpleDB',
             ItemName=item_name,
             AttributeNames=['classification'],
-            ConsistentRead=True  # Use consistent read for autograder
+            ConsistentRead=False
         )
         for attr in response.get('Attributes', []):
             if attr['Name'] == 'classification':
-                logger.info(f"Found classification: {attr['Value']}")
                 return attr['Value']
-        logger.warning(f"No classification found for {item_name}")
         return None
-    except Exception as e:
-        logger.error(f"Error getting classification for {item_name}: {e}")
+    except:
         return None
 
 @app.route('/', methods=['POST'])
 def handle_request():
-    try:
-        logger.info(f"Received request: {request.method} {request.url}")
-        
-        if 'inputFile' not in request.files:
-            logger.error("No inputFile in request")
-            return Response('No inputFile provided', status=400, mimetype='text/plain')
-        
-        file = request.files['inputFile']
-        if file.filename == '':
-            logger.error("Empty filename")
-            return Response('No file selected', status=400, mimetype='text/plain')
-        
-        filename = file.filename
-        filename_without_ext = os.path.splitext(filename)[0]
-        logger.info(f"Processing file: {filename}")
-        
-        # Read file content once
-        file.seek(0)
-        file_content = file.read()
-        logger.info(f"Read {len(file_content)} bytes")
-        
-        # Upload to S3 synchronously for autograder compatibility
-        upload_success = upload_to_s3(file_content, filename)
-        
-        # Get classification
-        classification = get_classification(filename_without_ext)
-        
-        if classification:
-            result = f'{filename_without_ext}:{classification}'
-        else:
-            result = f'{filename_without_ext}:Unknown'
-        
-        logger.info(f"Returning result: {result}")
-        return Response(result, status=200, mimetype='text/plain')
+    if 'inputFile' not in request.files:
+        return Response('No inputFile provided', status=400, mimetype='text/plain')
     
-    except Exception as e:
-        logger.error(f"Unexpected error: {e}")
-        return Response('Internal server error', status=500, mimetype='text/plain')
+    file = request.files['inputFile']
+    if file.filename == '':
+        return Response('No file selected', status=400, mimetype='text/plain')
+    
+    filename = file.filename
+    filename_without_ext = os.path.splitext(filename)[0]
+    
+    file.seek(0)
+    file_content = file.read()
+    
+    upload_to_s3(file_content, filename)
+    classification = get_classification(filename_without_ext)
+    
+    if classification:
+        result = f'{filename_without_ext}:{classification}'
+    else:
+        result = f'{filename_without_ext}:Unknown'
+    
+    return Response(result, status=200, mimetype='text/plain')
 
 @app.route('/health', methods=['GET'])
 def health_check():
